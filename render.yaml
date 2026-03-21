@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: taskflow-api
+    env: node
+    buildCommand: cd server && npm install && npx prisma generate && npx prisma db push
+    startCommand: cd server && node src/index.js
+    envVars:
+      - key: DATABASE_URL
+        value: file:./dev.db
+      - key: NODE_ENV
+        value: production
