@@ -1,0 +1,86 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test-server:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install server dependencies
+        working-directory: ./server
+        run: npm ci
+
+      - name: Generate Prisma client
+        working-directory: ./server
+        run: npx prisma generate
+
+      - name: Run server linter
+        working-directory: ./server
+        run: npm run lint
+
+      - name: Check server formatting
+        working-directory: ./server
+        run: npm run format:check
+
+      - name: Push database schema
+        working-directory: ./server
+        run: npx prisma db push
+        env:
+          DATABASE_URL: "file:./test.db"
+
+      - name: Run server unit tests
+        working-directory: ./server
+        run: npm run test:unit
+
+      - name: Run server integration tests
+        working-directory: ./server
+        run: npm run test:integration
+        env:
+          DATABASE_URL: "file:./test.db"
+
+  lint-and-test-client:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install client dependencies
+        working-directory: ./client
+        run: npm ci
+
+      - name: Run client linter
+        working-directory: ./client
+        run: npm run lint
+
+      - name: Check client formatting
+        working-directory: ./client
+        run: npm run format:check
+
+      - name: Run client unit tests
+        working-directory: ./client
+        run: npm test
