@@ -1,0 +1,41 @@
+name: PR Checks - Lint
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install server dependencies
+        working-directory: ./server
+        run: npm ci
+
+      - name: Lint server code
+        working-directory: ./server
+        run: npm run lint
+
+      - name: Check server formatting
+        working-directory: ./server
+        run: npm run format:check
+
+      - name: Install client dependencies
+        working-directory: ./client
+        run: npm ci
+
+      - name: Lint client code
+        working-directory: ./client
+        run: npm run lint
+
+      - name: Check client formatting
+        working-directory: ./client
+        run: npm run format:check
