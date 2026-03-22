@@ -179,6 +179,8 @@ docker run -p 3001:3001 taskflow-server
 
 ## ☁️ AWS EC2 Deployment
 
+**Step-by-step (launch EC2, security group, GitHub Secrets, verify PM2):** see [`EC2_DEPLOYMENT.md`](./EC2_DEPLOYMENT.md).
+
 ### Setup GitHub Secrets
 ```
 EC2_HOST     → Your EC2 public IP
