@@ -1,0 +1,9 @@
+variable "aws_region"        { default = "us-east-1" }
+variable "environment"       { default = "lab" }
+variable "project_name"      { default = "taskflow" }
+variable "vpc_cidr"          { default = "10.0.0.0/16" }
+variable "container_port"    { default = 3001 }
+variable "task_cpu"          { default = "512" }
+variable "task_memory"       { default = "1024" }
+variable "desired_count"     { default = 1 }
+variable "health_check_path" { default = "/api/health" }
