@@ -1,0 +1,159 @@
+name: ECS Fargate CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY: taskflow-server
+  ECS_CLUSTER: taskflow-cluster
+  ECS_SERVICE: taskflow-service
+  CONTAINER_NAME: taskflow-container
+
+jobs:
+  # PHASE 1: Run all tests — pipeline stops if any fail
+  test:
+    name: "Phase 1 - Run Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache server node_modules
+        uses: actions/cache@v4
+        with:
+          path: server/node_modules
+          key: server-deps-${{ hashFiles('server/package-lock.json') }}
+
+      - name: Cache client node_modules
+        uses: actions/cache@v4
+        with:
+          path: client/node_modules
+          key: client-deps-${{ hashFiles('client/package-lock.json') }}
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      - run: npm ci
+        working-directory: ./server
+      - run: npx prisma generate
+        working-directory: ./server
+      - run: npm run lint
+        working-directory: ./server
+      - run: npx prisma db push
+        working-directory: ./server
+        env: { DATABASE_URL: "file:./test.db" }
+      - run: npm run test:unit
+        working-directory: ./server
+        env: { DATABASE_URL: "file:./test.db" }
+      - run: npm run test:integration
+        working-directory: ./server
+        env: { DATABASE_URL: "file:./test.db" }
+
+      - run: npm ci
+        working-directory: ./client
+      - run: npm run lint
+        working-directory: ./client
+      - run: npm test
+        working-directory: ./client
+
+  # PHASE 2: Terraform — only on push to main (not PRs)
+  terraform:
+    name: "Phase 2 - Terraform Apply"
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: ./terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.12.0
+
+      - run: terraform init
+        env: { TF_LOG: INFO }
+      - run: terraform validate
+      - run: terraform plan -out=tfplan -no-color
+      - run: terraform apply -auto-approve tfplan
+
+  # PHASE 3: Docker build and push to ECR
+  docker-build-push:
+    name: "Phase 3 - Docker Build & Push"
+    runs-on: ubuntu-latest
+    needs: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Build from project root (not ./server) — uses root Dockerfile
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  # PHASE 4: Deploy to ECS Fargate
+  deploy-ecs:
+    name: "Phase 4 - Deploy to ECS Fargate"
+    runs-on: ubuntu-latest
+    needs: docker-build-push
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Get current task definition
+        run: aws ecs describe-task-definition --task-definition taskflow-task --query 'taskDefinition' --output json > task-def.json
+
+      - name: Update image in task definition
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_IMAGE="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}"
+          cat task-def.json | jq --arg IMAGE "$ECR_IMAGE" \
+            '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)' \
+            > new-task-def.json
+
+      - name: Register new task definition
+        id: register-task-def
+        run: |
+          ARN=$(aws ecs register-task-definition --cli-input-json file://new-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task_def_arn=$ARN" >> $GITHUB_OUTPUT
+
+      - name: Update ECS service
+        run: |
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE \
+            --task-definition ${{ steps.register-task-def.outputs.task_def_arn }} \
+            --force-new-deployment
+
+      - name: Wait for stability
+        run: aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE
