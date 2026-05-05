@@ -1,11 +1,42 @@
+# Dependencies
 node_modules/
 .npm-cache/
+
+# Build outputs
 dist/
 build/
+
+# Environment files
 .env
+.env.*
+
+# Database
 *.db
 *.db-journal
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Test outputs
 coverage/
 test-results/
 playwright-report/
+
+# Terraform — NEVER commit these
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/tfplan
+terraform/*.tfplan
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Docker
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
